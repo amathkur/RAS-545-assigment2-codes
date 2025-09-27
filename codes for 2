@@ -1,0 +1,197 @@
+####1) dobot_fk.m — Forward Kinematics (symbolic + numeric + quick plot)
+
+
+%% dobot_fk.m — Forward Kinematics for a Dobot-like 3R elbow arm (mm)
+clear; clc; close all;
+syms t1 t2 t3 a1 a2 a3 real
+
+% Link geometry (mm)
+a1v = 135;   % base offset (Z)
+a2v = 160;   % upper arm
+a3v = 170;   % forearm
+
+% DH-style homogeneous transforms (Rz, Tx along link, with base lift a1)
+H01 = [cos(t1) 0  sin(t1)  0;
+       sin(t1) 0 -cos(t1)  0;
+       0       1  0        a1;
+       0       0  0        1];
+
+H12 = [cos(t2) -sin(t2) 0 a2*cos(t2);
+       sin(t2)  cos(t2) 0 a2*sin(t2);
+       0        0       1 0;
+       0        0       0 1];
+
+H23 = [cos(t3) -sin(t3) 0 a3*cos(t3);
+       sin(t3)  cos(t3) 0 a3*sin(t3);
+       0        0       1 0;
+       0        0       0 1];
+
+H03 = simplify(H01*H12*H23);
+T = subs(H03, [a1 a2 a3], [a1v a2v a3v]);
+
+% Symbolic end-effector position
+Px = T(1,4); Py = T(2,4); Pz = T(3,4);
+
+% Evaluate at a sample configuration
+t1n = deg2rad(0);  t2n = deg2rad(35);  t3n = deg2rad(-60);
+p = double(subs([Px;Py;Pz], [t1 t2 t3], [t1n t2n t3n]));
+fprintf('FK (mm) at [t1=%g°, t2=%g°, t3=%g°]: [%.3f, %.3f, %.3f]\n', ...
+    rad2deg(t1n),rad2deg(t2n),rad2deg(t3n), p(1),p(2),p(3));
+
+% Simple planar link plot (top view, XY)
+theta1 = t1n; theta2 = t1n + t2n; theta3 = t1n + t2n + t3n;
+O  = [0;0];
+P1 = [a2v*cos(theta2); a2v*sin(theta2)];
+P2 = P1 + [a3v*cos(theta3); a3v*sin(theta3)];
+
+figure; plot([O(1) P1(1) P2(1)],[O(2) P1(2) P2(2)],'-o','LineWidth',2);
+axis equal; grid on; xlabel('X (mm)'); ylabel('Y (mm)');
+title('Dobot-like Planar Geometry (XY top view)');
+
+
+
+
+
+
+##2) dobot_ik.m — Inverse Kinematics (closed form for 3R; verifies via FK)
+
+
+%% dobot_ik.m — Closed-form IK for Dobot-like 3R elbow arm (mm)
+clear; clc;
+
+% Geometry (mm)
+a1 = 135; a2 = 160; a3 = 170;
+
+% Set a target pose (mm); edit as needed
+pxT = 285.137;  pyT = 0.0;  pzT = 154.927;
+
+% Compute IK
+R   = hypot(pxT, pyT);
+Z   = pzT - a1;
+L2  = a2; L3 = a3;
+
+c3  = (R^2 + Z^2 - L2^2 - L3^2)/(2*L2*L3);
+c3  = max(min(c3,1),-1);                 % clamp for numerical safety
+s3e = sqrt(max(0,1-c3^2));
+t3  = atan2(s3e, c3);                    % elbow-down (use -s3e for elbow-up)
+
+beta = atan2(L3*sin(t3), L2 + L3*cos(t3));
+phi  = atan2(Z, R);
+t2   = phi - beta;
+t1   = atan2(pyT, pxT);
+
+wrap = @(x) mod(rad2deg(x)+180,360)-180;
+fprintf('IK solution (deg): t1=%7.2f  t2=%7.2f  t3=%7.2f\n', wrap(t1), wrap(t2), wrap(t3));
+
+% Verify via FK
+px_fk =  cos(t1)*(a3*cos(t2+t3) + a2*cos(t2));
+py_fk =  sin(t1)*(a3*cos(t2+t3) + a2*cos(t2));
+pz_fk =  a1 + a3*sin(t2+t3) + a2*sin(t2);
+
+fprintf('FK from IK (mm): [%.3f, %.3f, %.3f]\n', px_fk, py_fk, pz_fk);
+fprintf('Error (mm): [%.3f, %.3f, %.3f]\n', pxT-px_fk, pyT-py_fk, pzT-pz_fk);
+
+
+
+###3) dobot_model.m — Rigid Body Tree (RBT) model (requires Robotics System Toolbox)
+
+
+
+%% dobot_model.m — RBT model for Dobot-like SCARA (R-R-revolute, lifted base)
+clear; clc; close all;
+
+a1 = 135e-3;  % m
+a2 = 160e-3;  % m
+a3 = 170e-3;  % m
+
+robot = rigidBodyTree("DataFormat","row","MaxNumBodies",4);
+
+% Bodies
+link1 = rigidBody("link1");
+link2 = rigidBody("link2");
+link3 = rigidBody("link3");
+ee    = rigidBody("ee");
+
+% Joints
+j1 = rigidBodyJoint("j1","revolute"); j1.JointAxis = [0 0 1];
+j2 = rigidBodyJoint("j2","revolute"); j2.JointAxis = [0 0 1];
+j3 = rigidBodyJoint("j3","revolute"); j3.JointAxis = [0 0 1]; % roll or wrist yaw if needed
+jE = rigidBodyJoint("jE","fixed");
+
+% Kinematic offsets (base lift then two in-plane links)
+setFixedTransform(j1, trvec2tform([0 0 a1]));       % lift base by a1
+setFixedTransform(j2, trvec2tform([a2 0 0]));       % first link a2 along x
+setFixedTransform(j3, trvec2tform([a3 0 0]));       % second link a3 along x
+setFixedTransform(jE, eye(4));
+
+link1.Joint = j1;  addBody(robot, link1, robot.BaseName);
+link2.Joint = j2;  addBody(robot, link2, "link1");
+link3.Joint = j3;  addBody(robot, link3, "link2");
+ee.Joint    = jE;  addBody(robot, ee,    "link3");
+
+showdetails(robot);
+
+% Show home and a sample configuration
+figure('Name','Dobot RBT'); 
+show(robot, [0 0 0]); title('Home'); axis equal;
+figure('Name','Dobot RBT Pose'); 
+show(robot, [deg2rad(30) deg2rad(20) deg2rad(-40)]);
+title('Sample Pose'); axis equal;
+
+
+
+###4) dobot_workspace.m — Workspace analysis (dense 3D cloud + projections)
+
+
+%% dobot_workspace.m — Workspace sweep for Dobot-like arm (meters)
+clear; clc; close all;
+
+a1 = 135e-3; a2 = 160e-3; a3 = 170e-3;
+
+% Joint limits (edit to match your device)
+lim_t1 = deg2rad([-90  90]);
+lim_t2 = deg2rad([-70  70]);
+lim_t3 = deg2rad([-85  85]);
+
+N = 40;  % resolution each joint
+t1v = linspace(lim_t1(1), lim_t1(2), N);
+t2v = linspace(lim_t2(1), lim_t2(2), N);
+t3v = linspace(lim_t3(1), lim_t3(2), N);
+
+% Fast forward kinematics function (meters)
+fk = @(t1,t2,t3) [ ...
+    cos(t1).*(a3*cos(t2+t3)+a2*cos(t2)); ...
+    sin(t1).*(a3*cos(t2+t3)+a2*cos(t2)); ...
+    a1 + a3*sin(t2+t3) + a2*sin(t2)];
+
+P = zeros(N^3,3);
+k = 1;
+for i = 1:N
+    for j = 1:N
+        for m = 1:N
+            p = fk(t1v(i), t2v(j), t3v(m));
+            P(k,:) = p(:).';
+            k = k+1;
+        end
+    end
+end
+
+% 3D scatter
+figure; scatter3(P(:,1)*1e3,P(:,2)*1e3,P(:,3)*1e3,6,'.'); 
+grid on; axis equal; xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('Z (mm)');
+title('Dobot Workspace (3D)');
+
+% XY projection
+figure; scatter(P(:,1)*1e3,P(:,2)*1e3,4,'.'); 
+axis equal; grid on; xlabel('X (mm)'); ylabel('Y (mm)');
+title('Workspace Projection: XY');
+
+% XZ projection
+figure; scatter(P(:,1)*1e3,P(:,3)*1e3,4,'.'); 
+axis equal; grid on; xlabel('X (mm)'); ylabel('Z (mm)');
+title('Workspace Projection: XZ');
+
+% YZ projection
+figure; scatter(P(:,2)*1e3,P(:,3)*1e3,4,'.'); 
+axis equal; grid on; xlabel('Y (mm)'); ylabel('Z (mm)');
+title('Workspace Projection: YZ');
