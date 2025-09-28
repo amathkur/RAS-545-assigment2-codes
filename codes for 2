@@ -1,3 +1,6 @@
+###1)  forward kinmatic
+
+
 clear; clc; close all;
 
 syms t1 t2 t3 a1 a2 a3 real
@@ -63,6 +66,10 @@ plot3([P0(1) P1(1) P2(1) P3(1)], ...
 xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('Z (mm)');
 title('Dobot 3R – Forward Kinematics Pose');
 view(45,25);
+
+
+
+
 
 
 
@@ -177,6 +184,11 @@ view(45,25);
 
 
 
+
+
+
+
+
 ###3) dobot_model.m — Rigid Body Tree (RBT) model (requires Robotics System Toolbox)
 
 
@@ -221,6 +233,10 @@ show(robot, [0 0 0]); title('Home'); axis equal;
 figure('Name','Dobot RBT Pose'); 
 show(robot, [deg2rad(30) deg2rad(20) deg2rad(-40)]);
 title('Sample Pose'); axis equal;
+
+
+
+
 
 
 
@@ -281,7 +297,12 @@ axis equal; grid on; xlabel('Y (mm)'); ylabel('Z (mm)');
 title('Workspace Projection: YZ');
 
 
-### verify dobot robot
+
+
+
+
+
+###5)  verify dobot robot
 
 % File: dobot_mlite_verify.m
 
