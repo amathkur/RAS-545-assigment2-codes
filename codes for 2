@@ -1,16 +1,12 @@
-####1) dobot_fk.m — Forward Kinematics (symbolic + numeric + quick plot)
-
-
-%% dobot_fk.m — Forward Kinematics for a Dobot-like 3R elbow arm (mm)
 clear; clc; close all;
+
 syms t1 t2 t3 a1 a2 a3 real
 
-% Link geometry (mm)
-a1v = 135;   % base offset (Z)
-a2v = 160;   % upper arm
-a3v = 170;   % forearm
+% ---- Robot dimensions (mm) ----
+a1v = 135;   % base vertical offset
+a2v = 160;   % upper arm length
+a3v = 170;   % forearm length
 
-% DH-style homogeneous transforms (Rz, Tx along link, with base lift a1)
 H01 = [cos(t1) 0  sin(t1)  0;
        sin(t1) 0 -cos(t1)  0;
        0       1  0        a1;
@@ -26,27 +22,47 @@ H23 = [cos(t3) -sin(t3) 0 a3*cos(t3);
        0        0       1 0;
        0        0       0 1];
 
+% ---- Full FK ----
 H03 = simplify(H01*H12*H23);
-T = subs(H03, [a1 a2 a3], [a1v a2v a3v]);
+R03 = simplify(H03(1:3,1:3));
+P03 = simplify(H03(1:3,4));
 
-% Symbolic end-effector position
-Px = T(1,4); Py = T(2,4); Pz = T(3,4);
+disp('=== Symbolic Forward Kinematics (Dobot 3R) ===');
+disp('H03 (symbolic) ='); disp(H03);
+disp('R03 (symbolic) ='); disp(R03);
+disp('P03 (symbolic, mm) ='); disp(P03);
 
-% Evaluate at a sample configuration
-t1n = deg2rad(0);  t2n = deg2rad(35);  t3n = deg2rad(-60);
-p = double(subs([Px;Py;Pz], [t1 t2 t3], [t1n t2n t3n]));
-fprintf('FK (mm) at [t1=%g°, t2=%g°, t3=%g°]: [%.3f, %.3f, %.3f]\n', ...
-    rad2deg(t1n),rad2deg(t2n),rad2deg(t3n), p(1),p(2),p(3));
+t1n = deg2rad(0);    % theta1
+t2n = deg2rad(35);   % theta2
+t3n = deg2rad(-60);  % theta3
 
-% Simple planar link plot (top view, XY)
-theta1 = t1n; theta2 = t1n + t2n; theta3 = t1n + t2n + t3n;
-O  = [0;0];
-P1 = [a2v*cos(theta2); a2v*sin(theta2)];
-P2 = P1 + [a3v*cos(theta3); a3v*sin(theta3)];
+Hn = double(subs(H03, {t1,t2,t3,a1,a2,a3}, {t1n,t2n,t3n,a1v,a2v,a3v}));
+Rn = Hn(1:3,1:3);
+Pn = Hn(1:3,4);
 
-figure; plot([O(1) P1(1) P2(1)],[O(2) P1(2) P2(2)],'-o','LineWidth',2);
-axis equal; grid on; xlabel('X (mm)'); ylabel('Y (mm)');
-title('Dobot-like Planar Geometry (XY top view)');
+disp('=== Numeric FK at [t1=0, t2=35deg, t3=-60deg] ===');
+disp('H03 (numeric) ='); disp(Hn);
+disp('R03 (numeric) ='); disp(Rn);
+disp('P03 (numeric, mm) ='); disp(Pn);
+
+O0 = [0;0;0;1];
+T01n = double(subs(H01, {t1,a1}, {t1n,a1v}));
+T12n = double(subs(H12, {t2,a2}, {t2n,a2v}));
+T23n = double(subs(H23, {t3,a3}, {t3n,a3v}));
+T02n = T01n*T12n; T03n = T02n*T23n;
+
+P0 = O0(1:3); 
+P1 = T01n(1:3,4); 
+P2 = T02n(1:3,4);
+P3 = T03n(1:3,4);
+
+figure('Name','Dobot 3R FK Pose'); grid on; axis equal; hold on
+plot3([P0(1) P1(1) P2(1) P3(1)], ...
+      [P0(2) P1(2) P2(2) P3(2)], ...
+      [P0(3) P1(3) P2(3) P3(3)], 'o-','LineWidth',2);
+xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('Z (mm)');
+title('Dobot 3R – Forward Kinematics Pose');
+view(45,25);
 
 
 
@@ -56,40 +72,108 @@ title('Dobot-like Planar Geometry (XY top view)');
 ##2) dobot_ik.m — Inverse Kinematics (closed form for 3R; verifies via FK)
 
 
-%% dobot_ik.m — Closed-form IK for Dobot-like 3R elbow arm (mm)
-clear; clc;
+%% dobot_ik.m — Inverse Kinematics (3R) for a Dobot-like arm + FK verification + plot
 
-% Geometry (mm)
-a1 = 135; a2 = 160; a3 = 170;
+clear; clc; close all;
 
-% Set a target pose (mm); edit as needed
-pxT = 285.137;  pyT = 0.0;  pzT = 154.927;
+syms t1 t2 t3 a1 a2 a3 real
 
-% Compute IK
-R   = hypot(pxT, pyT);
-Z   = pzT - a1;
-L2  = a2; L3 = a3;
+% ---------- Robot geometry (mm) ----------
+a1 = 135;    % vertical offset (base to shoulder plane)
+a2 = 160;    % upper arm length
+a3 = 170;    % forearm length
 
-c3  = (R^2 + Z^2 - L2^2 - L3^2)/(2*L2*L3);
-c3  = max(min(c3,1),-1);                 % clamp for numerical safety
-s3e = sqrt(max(0,1-c3^2));
-t3  = atan2(s3e, c3);                    % elbow-down (use -s3e for elbow-up)
+% ---------- Target EE position (mm) ----------
+% (Use your own target here if you like)
+pxT = 285.137;
+pyT =   0.000;
+pzT = 154.927;
 
-beta = atan2(L3*sin(t3), L2 + L3*cos(t3));
-phi  = atan2(Z, R);
-t2   = phi - beta;
-t1   = atan2(pyT, pxT);
+% ---------- Closed-form IK for 3R (elbow-up & elbow-down) ----------
+Rxy = hypot(pxT, pyT);   % horizontal radius
+Z   = pzT - a1;          % vertical from shoulder plane
 
-wrap = @(x) mod(rad2deg(x)+180,360)-180;
-fprintf('IK solution (deg): t1=%7.2f  t2=%7.2f  t3=%7.2f\n', wrap(t1), wrap(t2), wrap(t3));
+% Check reach
+reachMin = abs(a2 - a3);
+reachMax = a2 + a3;
+if Rxy^2 + Z^2 < reachMin^2 - 1e-9 || Rxy^2 + Z^2 > reachMax^2 + 1e-9
+    error('Target is out of reach: sqrt(R^2+Z^2)=%.3f (mm), allowed [%.3f, %.3f]', ...
+          sqrt(Rxy^2+Z^2), reachMin, reachMax);
+end
 
-% Verify via FK
-px_fk =  cos(t1)*(a3*cos(t2+t3) + a2*cos(t2));
-py_fk =  sin(t1)*(a3*cos(t2+t3) + a2*cos(t2));
-pz_fk =  a1 + a3*sin(t2+t3) + a2*sin(t2);
+% Solve planar 2R (in the t2-t3 plane)
+c3 = (Rxy^2 + Z^2 - a2^2 - a3^2) / (2*a2*a3);
+c3 = max(min(c3,1),-1);            % clamp for numeric safety
+s3_up   =  sqrt(max(0,1-c3^2));    % elbow-up
+s3_down = -sqrt(max(0,1-c3^2));    % elbow-down
 
-fprintf('FK from IK (mm): [%.3f, %.3f, %.3f]\n', px_fk, py_fk, pz_fk);
-fprintf('Error (mm): [%.3f, %.3f, %.3f]\n', pxT-px_fk, pyT-py_fk, pzT-pz_fk);
+t3_up   = atan2(s3_up,   c3);
+t3_down = atan2(s3_down, c3);
+
+beta_up   = atan2(a3*sin(t3_up),   a2 + a3*cos(t3_up));
+beta_down = atan2(a3*sin(t3_down), a2 + a3*cos(t3_down));
+
+phi = atan2(Z, Rxy);
+
+t2_up   = phi - beta_up;
+t2_down = phi - beta_down;
+
+% First joint about Z
+t1_sol = atan2(pyT, pxT);
+
+% Nice printing helper
+wrapDeg = @(x) mod(rad2deg(x)+180,360)-180;
+
+fprintf('Target (mm): [%.3f, %.3f, %.3f]\n', pxT, pyT, pzT);
+fprintf('IK (elbow-UP)   deg: t1=%7.2f  t2=%7.2f  t3=%7.2f\n', ...
+        wrapDeg(t1_sol), wrapDeg(t2_up),   wrapDeg(t3_up));
+fprintf('IK (elbow-DOWN) deg: t1=%7.2f  t2=%7.2f  t3=%7.2f\n', ...
+        wrapDeg(t1_sol), wrapDeg(t2_down), wrapDeg(t3_down));
+
+% ---------- Forward Kinematics (DH) to verify ----------
+% DH convention used here:
+%  Joint 1: rotate about Z at base, then lift to shoulder by a1 along Z (alpha=+90deg trick)
+%  Joint 2: rotate about Z in shoulder plane, translate a2 along X
+%  Joint 3: rotate about Z in elbow plane, translate a3 along X
+dh = @(th,d,al,a)[ cos(th) -sin(th)*cos(al)  sin(th)*sin(al)  a*cos(th); ...
+                   sin(th)  cos(th)*cos(al) -cos(th)*sin(al)  a*sin(th); ...
+                       0           sin(al)          cos(al)           d; ...
+                       0                0               0             1 ];
+
+t2n = t2_down; 
+t3n = t3_down; 
+t1n = t1_sol;
+
+T01 = dh(t1n, a1,  +pi/2, 0);
+T12 = dh(t2n, 0,        0, a2);
+T23 = dh(t3n, 0,        0, a3);
+T02 = T01*T12;
+T03 = T02*T23;
+
+% Decompose for reporting
+R03 = T03(1:3,1:3);
+P03 = T03(1:3,4);
+
+fprintf('\n--- FK verification for chosen IK (elbow-%s) ---\n', 'UP');
+fprintf('T03 = \n'); disp(T03);
+fprintf('R03 = \n'); disp(R03);
+fprintf('P03 (mm) = \n'); disp(P03.');
+
+% ---------- Simple pose plot ----------
+P0 = [0;0;0;1];
+P1 = T01*P0;   % origin of frame 1 relative to base
+P2 = T02*P0;   % origin of frame 2
+P3 = T03*P0;   % EE
+
+figure('Name','Dobot 3R IK Pose'); hold on; grid on; axis equal
+plot3([P0(1) P1(1) P2(1) P3(1)], ...
+      [P0(2) P1(2) P2(2) P3(2)], ...
+      [P0(3) P1(3) P2(3) P3(3)], 'o-','LineWidth',2);
+plot3(pxT,pyT,pzT,'r*','MarkerSize',10)
+xlabel('X (mm)'); ylabel('Y (mm)'); zlabel('Z (mm)');
+title('Dobot-like 3R IK solution (elbow-UP)');
+view(45,25);
+
 
 
 
@@ -195,3 +279,190 @@ title('Workspace Projection: XZ');
 figure; scatter(P(:,2)*1e3,P(:,3)*1e3,4,'.'); 
 axis equal; grid on; xlabel('Y (mm)'); ylabel('Z (mm)');
 title('Workspace Projection: YZ');
+
+
+### verify dobot robot
+
+% File: dobot_mlite_verify.m
+
+function dobot_mlite_verify()
+
+Lt    = 40;     % tool offset TCP-from-wrist [mm] (edit if your tool differs)
+alpha = 0.55;   % share of (340-Lt) for L1; L1=(340-Lt)*alpha, L2=(340-Lt)*(1-alpha)
+H0    = 95;     % base deck -> shoulder axis height [mm] (set per your robot)
+
+Lsum  = 340 - Lt;
+L1    = Lsum * alpha;
+L2    = Lsum * (1 - alpha);
+
+% Joint limits (rad)
+lim.q1 = deg2rad([-135, 135]);
+lim.q2 = deg2rad([  -5,  80]);
+lim.q3 = deg2rad([ -10,  85]);
+lim.q4 = deg2rad([-145, 145]);
+
+%% ---------------- Report: geometry, limits, DH-style summary ----------------
+fprintf('=== Dobot Magician Lite — Verification & Report ===\n');
+fprintf('Geometry (assumed): H0=%.1f mm, L1=%.1f mm, L2=%.1f mm, Lt=%.1f mm\n', H0,L1,L2,Lt);
+fprintf('Check: L1+L2+Lt = %.1f mm (target 340 mm)\n', L1+L2+Lt);
+fprintf('Joint limits (deg): J1[%4.0f,%4.0f], J2[%4.0f,%4.0f], J3[%4.0f,%4.0f], J4[%4.0f,%4.0f]\n', ...
+    rad2deg([lim.q1 lim.q2 lim.q3 lim.q4]));
+
+% Minimal DH-style documentation (Modified DH; rotations about z, translations in x,z)
+% This is for reference-print only; FK below is closed-form consistent with this layout.
+DH = [
+% i   alpha_i   a_i     d_i      theta_i
+  1,     0,     0,      H0,     'q1';
+  2,     0,    L1,      0,      'q2';
+  3,     0,    L2,      0,      'q3';
+  4,     0,    Lt,      0,      'q4'  % tool yaw offset in-plane
+];
+disp('MDH doc (ref only): [alpha a d theta] per joint:'), disp(DH(:,1:3));
+
+%% ---------------- Monte-Carlo FK <-> IK verification ----------------
+rng(1);
+N = 1000;
+qs = [rand_range(lim.q1,N), rand_range(lim.q2,N), rand_range(lim.q3,N), rand_range(lim.q4,N)];
+
+X   = zeros(3,N);
+yaw = zeros(1,N);
+for i=1:N
+    T = fk_mlite(qs(i,:), H0,L1,L2,Lt);
+    X(:,i) = T(1:3,4);
+    yaw(i) = atan2(T(2,1), T(1,1)); % global TCP yaw
+end
+
+Terr   = zeros(N,1);
+solved = false(N,1);
+branchWin = [0 0];
+
+for i=1:N
+    [qu, oku, eu] = ik_mlite(X(:,i), yaw(i), H0,L1,L2,Lt, lim, 'up');
+    [qd, okd, ed] = ik_mlite(X(:,i), yaw(i), H0,L1,L2,Lt, lim, 'down');
+    if eu <= ed
+        Terr(i) = eu; solved(i) = oku; branchWin(1)=branchWin(1)+1;
+    else
+        Terr(i) = ed; solved(i) = okd; branchWin(2)=branchWin(2)+1;
+    end
+end
+
+meanErr = mean(Terr);
+maxErr  = max(Terr);
+numOK   = sum(solved);
+pctUp   = 100*branchWin(1)/N;
+pctDn   = 100*branchWin(2)/N;
+
+% Workspace radius vs guide
+rXY  = hypot(X(1,:), X(2,:));
+rMax = max(rXY);
+rMin = min(rXY);
+reachOK = rMax <= 340 + 1.0; % 1 mm slack
+
+fprintf('--- Verification ---\n');
+fprintf('FK<->IK mean |pos err| : %.6f mm\n', meanErr);
+fprintf('FK<->IK max  |pos err| : %.6f mm\n', maxErr);
+fprintf('IK solved within limits: %d / %d\n', numOK, N);
+fprintf('Branch selection        : elbow-UP %.1f%%, elbow-DOWN %.1f%%\n', pctUp, pctDn);
+fprintf('Workspace radius (XY)   : min %.1f mm, max %.1f mm (guide max 340)\n', rMin, rMax);
+
+tolMean = 1e-6; tolMax = 1e-5;
+pass = (meanErr<=tolMean) && (maxErr<=tolMax) && (numOK==N) && reachOK;
+
+if pass
+    fprintf('[OK] Verification PASSED ✅\n');
+else
+    fprintf('[FAIL] Verification FAILED ❌\n');
+    if numOK < N
+        fprintf('  -> Some IK solutions hit limits (%d unsolved)\n', N-numOK);
+    end
+    if ~reachOK
+        fprintf('  -> Max XY reach exceeds 340 mm (%.2f)\n', rMax);
+    end
+    if meanErr>tolMean || maxErr>tolMax
+        fprintf('  -> FK/IK inconsistency: adjust H0/L1/L2/Lt to your hardware\n');
+    end
+end
+
+%% ---------------- Sample IK outputs (joints in deg) ----------------
+targets = [ ...
+   220  120  H0+ 80  30;   % [x y z yawDeg]
+   280   20  H0+ 40   0;
+   150 -150  H0+120 -45;
+];
+fprintf('\n--- Sample IK solutions (best branch) ---\n');
+for k=1:size(targets,1)
+    xd = targets(k,1:3).'; psi = deg2rad(targets(k,4));
+    [qu, oku, eu] = ik_mlite(xd, psi, H0,L1,L2,Lt, lim, 'up');
+    [qd, okd, ed] = ik_mlite(xd, psi, H0,L1,L2,Lt, lim, 'down');
+    if eu <= ed, q=qu; ok=oku; e=eu; branch='UP'; else, q=qd; ok=okd; e=ed; branch='DOWN'; end
+    fprintf('Target #%d: x=%.1f y=%.1f z=%.1f yaw=%.1f° -> branch=%s, ok=%d\n', ...
+        k, xd(1),xd(2),xd(3), targets(k,4), branch, ok);
+    fprintf('  q(deg) = [%-7.2f %-7.2f %-7.2f %-7.2f], |err|=%.3f mm\n', rad2deg(q));
+end
+
+end % <<<<< end main
+
+%% ==================== Local functions ====================
+function T = fk_mlite(q, H0,L1,L2,Lt)
+% Forward kinematics consistent with planar 2R arm on a vertical plane rotated by q1.
+q = q(:).'; q1=q(1); q2=q(2); q3=q(3); q4=q(4);
+c1=cos(q1); s1=sin(q1);
+c2=cos(q2); s2=sin(q2);
+c23=cos(q2+q3); s23=sin(q2+q3);
+
+% wrist center in world
+Rw = L1*c2 + L2*c23;           % radial distance in the local plane
+xw = c1 * Rw;
+yw = s1 * Rw;
+zw = H0 + L1*s2 + L2*s23;      % vertical
+
+% tool yaw (global about Z); tool is in XY only (no Z offset)
+psi = q1+q2+q3+q4; ct=cos(psi); st=sin(psi);
+xt = xw + Lt*ct; yt = yw + Lt*st; zt = zw;
+
+Rz = [ct -st 0; st ct 0; 0 0 1];
+T  = [Rz, [xt; yt; zt]; 0 0 0 1];
+end
+
+function [q, ok, err] = ik_mlite(p, yaw, H0,L1,L2,Lt, lim, branch)
+% Inverse kinematics: position p (3x1), global yaw (scalar, rad)
+px=p(1); py=p(2); pz=p(3);
+q1 = atan2(py, px);
+
+% wrist center (subtract tool along GLOBAL yaw in XY)
+xw = px - Lt*cos(yaw);
+yw = py - Lt*sin(yaw);
+zw = pz;
+
+% reduce to local plane distances
+rXY = hypot(xw,yw);
+r   = rXY;                      % radial in plane
+zr  = zw - H0;
+
+% Law of cosines for 2R
+D = (r^2 + zr^2 - L1^2 - L2^2)/(2*L1*L2);
+D = min(max(D,-1),1);
+if strcmpi(branch,'up')
+    q3 = atan2(-sqrt(1-D^2), D);    % elbow-up
+else
+    q3 = atan2(+sqrt(1-D^2), D);    % elbow-down
+end
+
+phi = atan2(zr, r);
+psi = atan2(L2*sin(q3), L1 + L2*cos(q3));
+q2  = phi - psi;
+
+q4  = yaw - (q1 + q2 + q3);
+
+q   = [wrapToPi(q1), wrapToPi(q2), wrapToPi(q3), wrapToPi(q4)];
+ok  = within(q(1),lim.q1) && within(q(2),lim.q2) && within(q(3),lim.q3) && within(q(4),lim.q4);
+
+% reconstruction error
+T   = fk_mlite(q, H0,L1,L2,Lt);
+err = norm(T(1:3,4) - p);
+end
+
+function v  = rand_range(rngpair,N), v = rngpair(1) + (rngpair(2)-rngpair(1)) * rand(N,1); end
+function tf = within(x,r), tf = (x>=r(1)-1e-9) && (x<=r(2)+1e-9); end
+function a  = wrapToPi(a), a = mod(a+pi, 2*pi) - pi; end
+
